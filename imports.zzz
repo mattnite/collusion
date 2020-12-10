@@ -1,14 +1,27 @@
-net:
-  root: /network.zig
-  src:
-    github:
-      repo: zig-network
-      user: MasterQ32
-      ref: master
 mecha:
-  root: /mecha.zig
+  root: mecha.zig
   src:
     github:
       repo: mecha
       user: Hejsil
+      ref: master
+pike:
+  root: pike.zig
+  src:
+    github:
+      repo: pike
+      user: lithdew
+      ref: master
+zap:
+  root: src/zap.zig
+  src:
+    github:
+      repo: zap
+      user: kprotty
+      ref: ziggo
+pam:
+  src:
+    github:
+      repo: pam
+      user: mattnite
       ref: master

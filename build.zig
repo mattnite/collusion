@@ -1,7 +1,10 @@
 const Builder = @import("std").build.Builder;
 const pkgs = @import("deps.zig").pkgs;
-const net = pkgs.net;
+
 const mecha = pkgs.mecha;
+const pike = pkgs.pike;
+const zap = pkgs.zap;
+const pam = pkgs.pam;
 
 pub fn build(b: *Builder) void {
     const target = b.standardTargetOptions(.{});
@@ -10,15 +13,17 @@ pub fn build(b: *Builder) void {
     const server = b.addExecutable("collusion-server", "src/server.zig");
     server.setTarget(target);
     server.setBuildMode(mode);
-    server.addPackage(mecha);
-    server.addPackage(net);
+    server.addPackage(pike);
+    server.addPackage(zap);
+    server.addPackage(pam);
     server.install();
 
     const client = b.addExecutable("collusion-client", "src/client.zig");
     client.setTarget(target);
     client.setBuildMode(mode);
-    client.addPackage(net);
     client.addPackage(mecha);
+    client.addPackage(pike);
+    client.addPackage(zap);
     client.install();
 
     const run_cmd = server.run();

@@ -4,7 +4,7 @@ if !exists("collusion_default_nick")
 endif
 
 if !exists("g:collusion_default_server")
-    let g:collusion_default_server = "collusion.com:80"
+    let g:collusion_default_server = "localhost"
 endif
 
 func! s:CollusionSetColors ()
@@ -56,7 +56,8 @@ function! s:CollusionStartJob (room, cmd, args)
     let server = a:args[0]
   endif
 
-  let b:job = job_start("/home/mknight/code/collusion/zig-cache/bin/collusion-client ".a:cmd." ".a:room." ".server." 666")
+  let b:job = job_start("/home/mknight/code/collusion/zig-cache/bin/collusion-client ".a:cmd." ".a:room." ".server." 9000")
+
   let b:channel = job_getchannel(b:job)
   let b:listener = listener_add('Listener')
 

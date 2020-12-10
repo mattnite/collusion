@@ -1,24 +1,20 @@
 const std = @import("std");
-const net = @import("net");
 const mecha = @import("mecha");
+const pike = @import("pike");
+const zap = @import("zap");
+const protocol = @import("protocol.zig");
 
-const Position = @import("server.zig").Position;
+const net = std.net;
+const mem = std.mem;
+const os = std.os;
 
-const Cmd = enum { host, join };
-const Event = union(enum) {
-    move: Position,
-    insert: struct {
-        start: u32,
-        added: u32,
-    },
-    delete: struct {
-        start: u32,
-        end: u32,
-    },
-    change: struct {
-        start: u32,
-    },
-};
+pub const pike_task = zap.runtime.executor.Task;
+pub const pike_batch = zap.runtime.executor.Batch;
+pub const pike_dispatch = dispatch;
+
+inline fn dispatch(batchable: anytype, args: anytype) void {
+    zap.runtime.schedule(batchable, args);
+}
 
 const two_nums = .{
     mecha.int(u32, 10),
@@ -27,21 +23,15 @@ const two_nums = .{
     mecha.eos,
 };
 
-const move = mecha.convert(Event, toMove, mecha.combine(.{mecha.string("mov ")} ++ two_nums));
-const insert = mecha.convert(Event, toInsert, mecha.combine(.{mecha.string("ins ")} ++ two_nums));
-const delete = mecha.convert(Event, toDelete, mecha.combine(.{mecha.string("del ")} ++ two_nums));
-const change = mecha.convert(Event, toChange, mecha.combine(.{ mecha.string("chg "), mecha.int(u32, 10) }));
+const move = mecha.map(Event, toMove, mecha.combine(.{mecha.string("mov ")} ++ two_nums));
+const insert = mecha.map(Event, toInsert, mecha.combine(.{mecha.string("ins ")} ++ two_nums));
+const delete = mecha.map(Event, toDelete, mecha.combine(.{mecha.string("del ")} ++ two_nums));
+const change = mecha.map(Event, toChange, mecha.combine(.{ mecha.string("chg "), mecha.int(u32, 10) }));
 const event_parser = mecha.oneOf(.{ move, insert, delete, change });
 
 pub fn main() anyerror!void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const allocator = &gpa.allocator;
-
-    const file = try std.fs.createFileAbsolute("/tmp/collusion.log", .{ .truncate = true });
-    defer file.close();
-
-    const log = file.writer();
-    const stdin = std.io.getStdIn().reader();
 
     var args = std.process.args();
     _ = args.skip();
@@ -58,16 +48,48 @@ pub fn main() anyerror!void {
     const port = try args.next(allocator) orelse error.MissingPort;
     defer allocator.free(port);
 
-    var buf: [80]u8 = undefined;
-    while (try stdin.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-        const event = (event_parser(line) orelse {
-            try log.print("I did bad: {}\n", .{line});
-            return error.WhatYouThinkin;
-        }).value;
+    try pike.init();
+    defer pike.deinit();
 
-        // do stuff
-        try log.print("{}\n", .{event});
+    const notifier = try pike.Notifier.init();
+    defer notifier.deinit();
+
+    var stopped = false;
+    var frame = async run(allocator, &notifier, &stopped, cmd, room, server, port);
+    while (!stopped) {
+        try notifier.poll(1_000_000);
     }
+
+    try nosuspend await frame;
+}
+
+fn run(
+    allocator: *mem.Allocator,
+    notifier: *const pike.Notifier,
+    stopped: *bool,
+    cmd: []const u8,
+    room: []const u8,
+    server: []const u8,
+    port: []const u8,
+) !void {
+    defer stopped.* = true;
+    const stdin = std.io.getStdIn().reader();
+    const stdout = std.io.getStdOut().writer();
+    var socket = try pike.Socket.init(os.AF_INET, os.SOCK_STREAM, os.IPPROTO_TCP, 0);
+    defer socket.deinit();
+
+    try socket.registerTo(notifier);
+    const list = try net.getAddressList(allocator, server, try std.fmt.parseUnsigned(u16, port, 10));
+    defer list.deinit();
+
+    for (list.addrs) |addr| {
+        socket.connect(addr) catch continue;
+        std.log.info("Connected to {}", .{addr});
+        break;
+    } else return error.CantConnect;
+
+    //try protocol.authenticate(&socket, stdin, stdout);
+    //try protocol.init(&socket, cmd, room, stdin, stdout);
 }
 
 fn toMove(tuple: anytype) ?Event {
