@@ -1,8 +1,8 @@
-usingnamespace @import("protocol.zig");
 const std = @import("std");
 const pike = @import("pike");
 const zap = @import("zap");
-//const pam = @import("pam");
+const pam = @import("pam");
+const protocol = @import("protocol.zig");
 
 pub const pike_task = zap.runtime.executor.Task;
 pub const pike_batch = zap.runtime.executor.Batch;
@@ -11,6 +11,9 @@ pub const pike_dispatch = dispatch;
 const Allocator = std.mem.Allocator;
 const Line = std.ArrayListUnmanaged(u8);
 const Buffer = std.ArrayListUnmanaged(Line);
+const Message = protocol.Message(pike.Socket.Reader, pike.Socket.Writer);
+const Position = protocol.Position;
+const UserCursor = protocol.UserCursor;
 
 inline fn dispatch(batchable: anytype, args: anytype) void {
     zap.runtime.schedule(batchable, args);
@@ -36,9 +39,6 @@ const User = struct {
         while (true) {
             // TODO: handle closed connection
             const message = try Message.deserialize(self.client.socket.reader());
-
-            std.log.debug("{}: {}", .{ self.client.socket, message });
-
             const held = self.room.mtx.acquire();
             defer held.release();
 
@@ -200,11 +200,10 @@ pub const Client = struct {
         //defer pam_client.end() catch {};
         //try pam_client.authenticate(0);
 
-        try Message.serialize(.{ .ok = {} }, null, writer);
+        try Message.serialize(.{ .ok = .{} }, null, writer);
         var msg = try Message.deserialize(reader);
         if (msg.event != .start) return error.BadResponse;
         const room_name = try msg.readPayload(server.allocator);
-
         const room_exists = server.rooms.contains(room_name);
         const entry = switch (msg.event.start.cmd) {
             .host => blk: {
@@ -226,7 +225,7 @@ pub const Client = struct {
         };
 
         try entry.*.value.createUser(self);
-        try Message.serialize(.{ .ok = {} }, null, self.socket.writer());
+        try Message.serialize(.{ .ok = .{} }, null, self.socket.writer());
     }
 };
 
@@ -284,6 +283,7 @@ pub const Server = struct {
                 },
             };
 
+            std.log.debug("accepted connection, running client", .{});
             zap.runtime.spawn(.{}, Client.run, .{ self, notifier, conn.socket, conn.address }) catch |err| {
                 std.log.err("Server - runtime.spawn(): {}", .{@errorName(err)});
                 continue;

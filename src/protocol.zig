@@ -2,70 +2,6 @@ const std = @import("std");
 const pike = @import("pike");
 const pam = @import("pam");
 
-pub const Cmd = enum { host, join };
-
-pub const Message = struct {
-    event: Event,
-    payload: ?Payload,
-
-    const Deserializer = std.io.Deserializer(.Big, .Byte, pike.Socket.Reader);
-    const Serializer = std.io.Serializer(.Big, .Byte, pike.Socket.Writer);
-
-    const Payload = struct {
-        internal: pike.Socket.Reader,
-        len: u32,
-
-        const Reader = std.io.Reader(*Payload, pike.Socket.Reader.Error, Payload.read);
-
-        fn read(self: *Payload, buf: []u8) pike.Socket.Reader.Error!usize {
-            if (self.len == 0) return error.EndOfStream;
-            const n = try self.internal.read(buf[0..std.math.min(buf.len, self.len)]);
-            self.len -= @intCast(u32, n);
-            return n;
-        }
-
-        fn reader(self: *Payload) Reader {
-            return .{ .context = self };
-        }
-    };
-
-    pub fn deserialize(reader: pike.Socket.Reader) !Message {
-        var deserializer = Deserializer.init(reader);
-        const event = try deserializer.deserialize(Event);
-        return Message{
-            .event = event,
-            .payload = inline for (std.meta.fields(Event)) |field| {
-                if (@hasField(@TypeOf(@field(Event, field.name)), "len")) break Payload{ .internal = reader, .len = event.len };
-            } else null,
-        };
-    }
-
-    pub fn readPayload(self: *Message, allocator: *std.mem.Allocator) ![]const u8 {
-        return if (self.payload) |*p|
-            try p.reader().readAllAlloc(allocator, 0x2000)
-        else
-            error.NoPayload;
-    }
-
-    pub fn serialize(event: Event, payload: ?[]const u8, writer: pike.Socket.Writer) !void {
-        var serializer = Serializer.init(writer);
-        var e = event;
-
-        inline for (std.meta.fields(Event)) |field| {
-            if (@hasField(@TypeOf(@field(Event, field.name)), "len")) {
-                if (payload) |p| {
-                    e.len = p.len;
-                }
-            }
-        }
-
-        try serializer.serialize(e);
-        if (payload) |p| {
-            try writer.writeAll(p);
-        }
-    }
-};
-
 // As soon as a client connects to the collusion server it will be prompted for
 // a username. This will be sent over as a pam style prompt so that vim can
 // easily get the user to fill it out, it is always guaranteed.
@@ -92,30 +28,28 @@ pub const Message = struct {
 // In this case it sends a string to be displayed in vim, and then closes the
 // connection to the client.
 
+pub const Cmd = enum { host, join };
 const StringPayload = struct {
     len: u32 = 0,
 };
 
-pub const MessageStyle = enum(u8) {
-    prompt_echo_off = pam.Message.Style.prompt_echo_off,
-    prompt_echo_on = pam.Message.Style.prompt_echo_on,
-    error_msg = pam.Message.Style.error_msg,
-    text_info = pam.Message.Style.text_info,
-};
+pub const MessageStyle = pam.Message.Style;
 
 pub const Event = union(enum) {
-    ok: void,
+    ok: struct {
+        something: u32 = 0,
+    },
     err: StringPayload,
 
     // auth
     request: struct {
-        style: pam.Message.Style,
+        style: MessageStyle,
         len: u32 = 0,
     },
     response: StringPayload,
     start: struct {
         cmd: Cmd,
-        len: u32,
+        len: u32 = 0,
     },
 
     // regular events
@@ -147,3 +81,116 @@ pub const Position = struct {
     line: u32,
     col: u32,
 };
+
+pub fn Message(comptime Reader: type, comptime Writer: type) type {
+    return struct {
+        event: Event,
+        payload: ?Payload,
+
+        const Self = @This();
+
+        const Deserializer = std.io.Deserializer(.Big, .Byte, Reader);
+        const Serializer = std.io.Serializer(.Big, .Byte, Writer);
+
+        const Payload = struct {
+            internal: Reader,
+            len: u32,
+
+            const PayloadReader = std.io.Reader(*Payload, Reader.Error, Payload.read);
+
+            fn read(self: *Payload, buf: []u8) Reader.Error!usize {
+                if (self.len == 0) return 0;
+                const n = try self.internal.read(buf[0..std.math.min(buf.len, self.len)]);
+                self.len -= @intCast(u32, n);
+                return n;
+            }
+
+            fn reader(payload: *Payload) PayloadReader {
+                return .{ .context = payload };
+            }
+        };
+
+        pub fn deserialize(reader: Reader) !Self {
+            var deserializer = Deserializer.init(reader);
+            const event = try deserializer.deserialize(Event);
+            const msg = Self{
+                .event = event,
+                .payload = inline for (std.meta.fields(Event)) |field| {
+                    const TagType = @field(@TagType(Event), field.name);
+                    const TagPayload = std.meta.TagPayloadType(Event, TagType);
+                    if (event == TagType) {
+                        if (TagPayload != void and @hasField(TagPayload, "len")) {
+                            break Payload{ .internal = reader, .len = @field(event, field.name).len };
+                        }
+                    }
+                } else null,
+            };
+
+            return msg;
+        }
+
+        pub fn readPayload(self: *Self, allocator: *std.mem.Allocator) ![]const u8 {
+            return if (self.payload) |*p|
+                try p.reader().readAllAlloc(allocator, 0x2000)
+            else
+                error.NoPayload;
+        }
+
+        pub fn serialize(event: Event, payload: ?[]const u8, writer: Writer) !void {
+            var serializer = Serializer.init(writer);
+            var e = event;
+
+            inline for (std.meta.fields(Event)) |field| {
+                const TagType = @field(@TagType(Event), field.name);
+                const TagPayload = std.meta.TagPayloadType(Event, TagType);
+                if (event == TagType) {
+                    if (TagPayload != void and @hasField(TagPayload, "len")) {
+                        if (payload) |p| {
+                            @field(e, field.name).len = @intCast(u32, p.len);
+                        }
+                    }
+                }
+            }
+
+            try serializer.serialize(e);
+            if (payload) |p| {
+                try writer.writeAll(p);
+            }
+        }
+    };
+}
+
+test "serialize ok" {
+    const Fifo = std.fifo.LinearFifo(u8, .{ .Static = 80 });
+    var fifo = Fifo.init();
+    defer fifo.deinit();
+
+    const TestMessage = Message(@TypeOf(fifo.reader()), @TypeOf(fifo.writer()));
+
+    try TestMessage.serialize(.{ .ok = .{} }, null, fifo.writer());
+    const msg = try TestMessage.deserialize(fifo.reader());
+
+    std.testing.expectEqual(msg.event, .{ .ok = .{} });
+    std.testing.expectEqual(msg.payload, null);
+}
+
+test "serialize request" {
+    const Fifo = std.fifo.LinearFifo(u8, .{ .Static = 80 });
+    var fifo = Fifo.init();
+    defer fifo.deinit();
+
+    const TestMessage = Message(@TypeOf(fifo.reader()), @TypeOf(fifo.writer()));
+
+    const payload_expected = "hello this is a payload";
+    const expected = Event{ .request = .{ .style = MessageStyle.prompt_echo_on } };
+    try TestMessage.serialize(expected, payload_expected, fifo.writer());
+    var msg = try TestMessage.deserialize(fifo.reader());
+
+    std.testing.expectEqual(expected.request.style, msg.event.request.style);
+    std.testing.expect(msg.payload != null);
+
+    const payload = try msg.payload.?.reader().readAllAlloc(std.heap.page_allocator, 0x2000);
+    defer std.heap.page_allocator.free(payload);
+
+    std.testing.expectEqualSlices(u8, payload_expected, payload);
+}

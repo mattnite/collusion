@@ -21,10 +21,16 @@ pub fn build(b: *Builder) void {
     const client = b.addExecutable("collusion-client", "src/client.zig");
     client.setTarget(target);
     client.setBuildMode(mode);
-    client.addPackage(mecha);
     client.addPackage(pike);
     client.addPackage(zap);
+    client.addPackage(pam);
+    client.addPackage(mecha);
     client.install();
+
+    const tests = b.addTest("src/protocol.zig");
+    tests.setTarget(target);
+    tests.setBuildMode(mode);
+    tests.addPackage(pam);
 
     const run_cmd = server.run();
     run_cmd.step.dependOn(b.getInstallStep());
@@ -34,4 +40,7 @@ pub fn build(b: *Builder) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+
+    const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&tests.step);
 }

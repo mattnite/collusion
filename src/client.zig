@@ -4,17 +4,8 @@ const pike = @import("pike");
 const zap = @import("zap");
 const protocol = @import("protocol.zig");
 
-const net = std.net;
-const mem = std.mem;
 const os = std.os;
-
-pub const pike_task = zap.runtime.executor.Task;
-pub const pike_batch = zap.runtime.executor.Batch;
-pub const pike_dispatch = dispatch;
-
-inline fn dispatch(batchable: anytype, args: anytype) void {
-    zap.runtime.schedule(batchable, args);
-}
+const Message = protocol.Message(std.fs.File.Reader, std.fs.File.Writer);
 
 const two_nums = .{
     mecha.int(u32, 10),
@@ -36,8 +27,16 @@ pub fn main() anyerror!void {
     var args = std.process.args();
     _ = args.skip();
 
-    const cmd = try args.next(allocator) orelse error.MissingCmd;
-    defer allocator.free(cmd);
+    const cmd = blk: {
+        const str = try args.next(allocator) orelse error.MissingCmd;
+        defer allocator.free(str);
+
+        if (std.mem.eql(u8, str, "host")) {
+            break :blk protocol.Cmd.host;
+        } else if (std.mem.eql(u8, str, "join")) {
+            break :blk protocol.Cmd.join;
+        } else return error.InvalidCmd;
+    };
 
     const room = try args.next(allocator) orelse error.MissingRoom;
     defer allocator.free(room);
@@ -48,48 +47,49 @@ pub fn main() anyerror!void {
     const port = try args.next(allocator) orelse error.MissingPort;
     defer allocator.free(port);
 
-    try pike.init();
-    defer pike.deinit();
-
-    const notifier = try pike.Notifier.init();
-    defer notifier.deinit();
-
-    var stopped = false;
-    var frame = async run(allocator, &notifier, &stopped, cmd, room, server, port);
-    while (!stopped) {
-        try notifier.poll(1_000_000);
-    }
-
-    try nosuspend await frame;
-}
-
-fn run(
-    allocator: *mem.Allocator,
-    notifier: *const pike.Notifier,
-    stopped: *bool,
-    cmd: []const u8,
-    room: []const u8,
-    server: []const u8,
-    port: []const u8,
-) !void {
-    defer stopped.* = true;
     const stdin = std.io.getStdIn().reader();
     const stdout = std.io.getStdOut().writer();
-    var socket = try pike.Socket.init(os.AF_INET, os.SOCK_STREAM, os.IPPROTO_TCP, 0);
-    defer socket.deinit();
 
-    try socket.registerTo(notifier);
-    const list = try net.getAddressList(allocator, server, try std.fmt.parseUnsigned(u16, port, 10));
-    defer list.deinit();
+    const socket = try std.net.tcpConnectToHost(allocator, server, try std.fmt.parseUnsigned(u16, port, 10));
+    defer socket.close();
 
-    for (list.addrs) |addr| {
-        socket.connect(addr) catch continue;
-        std.log.info("Connected to {}", .{addr});
-        break;
-    } else return error.CantConnect;
+    while (true) {
+        var msg = try Message.deserialize(socket.reader());
+        switch (msg.event) {
+            .ok => break,
+            .request => |req| {
+                const payload = try msg.readPayload(allocator);
+                defer allocator.free(payload);
 
-    //try protocol.authenticate(&socket, stdin, stdout);
-    //try protocol.init(&socket, cmd, room, stdin, stdout);
+                switch (req.style) {
+                    .prompt_echo_off => {
+                        try stdout.print("inputsecret(\"{}\")\n", .{payload});
+                        const line = try stdin.readUntilDelimiterAlloc(allocator, '\n', 0x200);
+                        defer allocator.free(line);
+                        try Message.serialize(.{ .response = .{} }, line, socket.writer());
+                    },
+                    .prompt_echo_on => {
+                        try stdout.print("input(\"{}\")\n", .{payload});
+                        const line = try stdin.readUntilDelimiterAlloc(allocator, '\n', 0x200);
+                        defer allocator.free(line);
+                        try Message.serialize(.{ .response = .{} }, line, socket.writer());
+                    },
+                    .text_info => {
+                        try stdout.print("echo \"{}\"\n", .{payload});
+                        try Message.serialize(.{ .response = .{} }, "", socket.writer());
+                    },
+                    .error_msg => {
+                        try stdout.print("echo \"{}\"\n", .{payload});
+                        try Message.serialize(.{ .response = .{} }, "", socket.writer());
+                    },
+                    else => return error.UnknownMessageType,
+                }
+            },
+            else => return error.UnexpectedMessageType,
+        }
+    }
+
+    try Message.serialize(.{ .start = .{ .cmd = cmd } }, room, socket.writer());
 }
 
 fn toMove(tuple: anytype) ?Event {
