@@ -49,6 +49,10 @@ function! s:CollusionQuit ()
   augroup END
 endfunction
 
+function! OutHandler(channel, msg)
+  execute a:msg
+endfunction
+
 function! s:CollusionStartJob (room, cmd, args)
   if len(a:args) == 0
     let server = g:collusion_default_server
@@ -56,8 +60,7 @@ function! s:CollusionStartJob (room, cmd, args)
     let server = a:args[0]
   endif
 
-  let b:job = job_start("/home/mknight/code/collusion/zig-cache/bin/collusion-client ".a:cmd." ".a:room." ".server." 9000")
-
+  let b:job = job_start("/home/mknight/code/collusion/zig-cache/bin/collusion-client ".a:cmd." ".a:room." ".server." 9000", {"out_cb": "OutHandler"})
   let b:channel = job_getchannel(b:job)
   let b:listener = listener_add('Listener')
 
@@ -65,15 +68,6 @@ function! s:CollusionStartJob (room, cmd, args)
     au CursorMoved <buffer> call MovedHandler(b:channel)
     au BufDelete <buffer> call s:CollusionQuit()
   augroup END
-
-"  if a:cmd == "host"
-"    let total = line('$')
-"    call ch_sendraw(b:channel, "sync ".total."\n")
-"
-"    for line in getline(1, total)
-"      call ch_sendraw(b:channel, line."\n")
-"    endfor
-"  endif
 endfunc
 
 function! s:CollusionHost (room, ...)

@@ -13,16 +13,12 @@ pub fn build(b: *Builder) void {
     const server = b.addExecutable("collusion-server", "src/server.zig");
     server.setTarget(target);
     server.setBuildMode(mode);
-    server.addPackage(pike);
-    server.addPackage(zap);
     server.addPackage(pam);
     server.install();
 
     const client = b.addExecutable("collusion-client", "src/client.zig");
     client.setTarget(target);
     client.setBuildMode(mode);
-    client.addPackage(pike);
-    client.addPackage(zap);
     client.addPackage(pam);
     client.addPackage(mecha);
     client.install();

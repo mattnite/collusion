@@ -1,27 +1,14 @@
-mecha:
-  root: mecha.zig
-  src:
-    github:
-      repo: mecha
-      user: Hejsil
-      ref: master
-pike:
-  root: pike.zig
-  src:
-    github:
-      repo: pike
-      user: lithdew
-      ref: master
-zap:
-  root: src/zap.zig
-  src:
-    github:
-      repo: zap
-      user: kprotty
-      ref: ziggo
 pam:
+  root: src/main.zig
   src:
     github:
       repo: pam
       user: mattnite
       ref: master
+mecha:
+  root: /mecha.zig
+  src:
+    github:
+      repo: mecha
+      user: Hejsil
+      ref: b13ccd139f9f53aca6e56bfd36beeab07cdde0b0
